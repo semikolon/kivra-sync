@@ -2,7 +2,13 @@
 
 An automation tool that connects to Kivra (a Swedish digital mailbox service) to download and organize your digital receipts and letters, helping you maintain a local backup of your important documents.
 
-This tool is originaly based on a script created here https://github.com/stefangorling/fetch-kivra, thanks Stefan! It has since gone through major changes and feature additions.
+This is a fork of [felixandersen/kivra-sync](https://github.com/felixandersen/kivra-sync) extending it with **refresh-token persistence**, **env-var SSN sourcing**, and **comprehensive test coverage** — see [`CHANGES.md`](CHANGES.md). Originally based on a script by [Stefan Gorling](https://github.com/stefangorling/fetch-kivra) — thanks Stefan!
+
+## What's different in this fork
+
+- **No fresh BankID scan on every run.** The OAuth `refresh_token` (when Kivra issues one) is persisted to `~/.local/share/kivra-sync/tokens-{hash}.json` (mode 0600), and reused on subsequent runs. BankID is only needed when the refresh token expires or is revoked.
+- **SSN can come from `KIVRA_SSN` env var** instead of a positional argument, keeping it out of `ps aux` and shell history. The positional argument still works as an override.
+- **55 unit tests + ≥95% coverage** on the new modules (`kivra/tokens.py`, `kivra/config.py`) and on the refresh/fallback orchestration in `kivra/auth.py`. Run `pytest tests/`.
 
 ## Disclaimer
 
@@ -39,13 +45,19 @@ Note: this will not work with the default `local` interaction provider since the
 ### Option 2: Using Python
 
 ```bash
-# Install system dependencies (Debian/Ubuntu)
-apt-get install weasyprint
+# Install system dependencies
+apt-get install weasyprint       # Debian/Ubuntu
+brew install weasyprint           # macOS
 
-# Install Python dependencies
+# Install Python dependencies (use a venv)
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# Run the script
+# Preferred: SSN via env var (keeps it out of `ps aux` and shell history)
+export KIVRA_SSN=YYYYMMDDXXXX
+python kivra_sync.py
+
+# Or pass on argv (still supported):
 python kivra_sync.py YYYYMMDDXXXX
 ```
 

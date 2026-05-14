@@ -11,6 +11,7 @@ import tempfile
 from __version__ import __version__
 from kivra.auth import KivraAuth
 from kivra.api import KivraApiClient
+from kivra.config import get_ssn
 from kivra.receipts import ReceiptFetcher
 from kivra.letters import LetterFetcher
 from storage.filesystem import FileSystemStoreProvider
@@ -32,9 +33,10 @@ def fetch_documents(args, interaction_provider, document_store, temp_dir):
         int: Exit code (0 for success, non-zero for failure)
     """
     try:
-        # Authenticate with Kivra
+        # Authenticate with Kivra — tries cached access_token → refresh-token grant
+        # → BankID QR flow, in that order. Persists tokens after each successful auth.
         auth = KivraAuth(temp_dir, interaction_provider)
-        token_info = auth.authenticate(args.ssn)
+        token_info = auth.authenticate_with_refresh_fallback(args.ssn)
         
         # Extract tokens
         access_token = token_info['access_token']
@@ -85,7 +87,10 @@ def main():
         prog='kivra-sync'
     )
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
-    parser.add_argument('ssn', help='Personal identity number (YYYYMMDDXXXX)')
+    parser.add_argument('ssn', nargs='?', default=None,
+                        help='Personal identity number (YYYYMMDDXXXX). '
+                             'Optional — falls back to KIVRA_SSN env var, '
+                             'which keeps the SSN out of `ps aux`.')
     
     # Storage provider selection
     parser.add_argument('--storage-provider', choices=['filesystem', 'paperless'], default='filesystem',
@@ -125,7 +130,12 @@ def main():
     parser.add_argument('--max-letters', type=int, default=0, help='Maximum number of letters to fetch (default: 0, 0 for unlimited)')
     
     args = parser.parse_args()
-    
+
+    # Resolve SSN from argv > env var KIVRA_SSN > exit. Stored back onto args
+    # so all downstream code (document store path, fetch_documents) sees the
+    # resolved value. See kivra/config.py for sourcing rules.
+    args.ssn = get_ssn(args.ssn)
+
     # Create temp directory for QR codes and other temporary files
     # Prefer env overrides and OS temp; avoid writing into read-only installs
     script_dir = os.path.dirname(os.path.abspath(__file__))

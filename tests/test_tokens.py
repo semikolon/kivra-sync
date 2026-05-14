@@ -234,3 +234,86 @@ def test_delete_tokens_removes_file_and_idempotent(tokens_dir, kivra_bankid_resp
 
     # Idempotent
     tokens.delete_tokens(FAKE_SSN)  # should not raise
+
+
+# ----- coverage-hardening: defensive paths -----
+
+
+def test_default_tokens_dir_no_env_uses_home(monkeypatch, tmp_path):
+    """When KIVRA_SYNC_TOKENS_DIR is unset, fall back to ~/.local/share/kivra-sync."""
+    monkeypatch.delenv("KIVRA_SYNC_TOKENS_DIR", raising=False)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+
+    path = tokens.tokens_path(FAKE_SSN)
+    # Path components should include the documented default
+    assert path.parent.name == "kivra-sync"
+    assert path.parent.parent.name == "share"
+    assert str(tmp_path) in str(path)
+
+
+def test_save_tokens_raises_value_error_on_missing_access_token(tokens_dir):
+    """save_tokens enforces the access_token contract."""
+    with pytest.raises(ValueError, match="missing access_token"):
+        tokens.save_tokens(FAKE_SSN, {"refresh_token": "x"}, {"kivra_user_id": "abc"})
+
+
+def test_load_tokens_stat_oserror_returns_none(
+    tokens_dir, kivra_bankid_response_with_refresh, monkeypatch
+):
+    """If Path.stat() raises OSError mid-flight, load_tokens returns None (defensive)."""
+    tokens.save_tokens(FAKE_SSN, kivra_bankid_response_with_refresh, {"kivra_user_id": "abc"})
+    target = tokens.tokens_path(FAKE_SSN)
+
+    original_stat = Path.stat
+
+    def failing_stat(self, *args, **kwargs):
+        if self == target:
+            raise OSError("simulated stat failure")
+        return original_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", failing_stat)
+    assert tokens.load_tokens(FAKE_SSN) is None
+
+
+def test_load_tokens_read_oserror_returns_none(
+    tokens_dir, kivra_bankid_response_with_refresh, monkeypatch
+):
+    """If Path.read_text() raises OSError mid-flight, load_tokens returns None (defensive)."""
+    tokens.save_tokens(FAKE_SSN, kivra_bankid_response_with_refresh, {"kivra_user_id": "abc"})
+
+    def failing_read(*args, **kwargs):
+        raise OSError("simulated read failure")
+
+    monkeypatch.setattr(Path, "read_text", failing_read)
+    assert tokens.load_tokens(FAKE_SSN) is None
+
+
+def test_save_tokens_cleans_up_tmp_on_write_failure(
+    tokens_dir, kivra_bankid_response_with_refresh, monkeypatch
+):
+    """Mid-write failure → .tmp file removed + exception propagates."""
+
+    real_dump = json.dump
+
+    def failing_dump(obj, fp, *args, **kwargs):
+        raise RuntimeError("simulated json.dump failure")
+
+    monkeypatch.setattr("kivra.tokens.json.dump", failing_dump)
+
+    with pytest.raises(RuntimeError, match="simulated json.dump failure"):
+        tokens.save_tokens(FAKE_SSN, kivra_bankid_response_with_refresh, {"kivra_user_id": "abc"})
+
+    # Neither the final file nor the .tmp should remain
+    final = tokens.tokens_path(FAKE_SSN)
+    tmp = final.with_suffix(final.suffix + ".tmp")
+    assert not final.exists()
+    assert not tmp.exists()
+
+
+def test_is_access_token_expired_naive_datetime_treated_as_utc():
+    """A naive ISO datetime (no tz info) is assumed UTC (defensive — shouldn't happen with our writer)."""
+    with freeze_time("2026-05-14T12:00:00Z"):
+        # 5 minutes before frozen now, naive (no Z, no offset)
+        assert tokens.is_access_token_expired({"access_token_expires_at": "2026-05-14T11:55:00"}) is True
+        # 5 minutes after frozen now, naive
+        assert tokens.is_access_token_expired({"access_token_expires_at": "2026-05-14T12:05:00"}) is False

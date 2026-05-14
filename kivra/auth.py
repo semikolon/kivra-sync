@@ -11,6 +11,10 @@ import os
 import logging
 import json
 import sys
+from typing import Optional
+
+from kivra import tokens as _token_store
+
 
 class KivraAuth:
     """Class for handling Kivra authentication via BankID."""
@@ -200,15 +204,127 @@ class KivraAuth:
                     logging.error(f"Could not find kivra_user_id in token: {jwt_data}")
                     sys.exit("Missing kivra_user_id")
                 
-                # Return token information
+                # Return token information.
+                # `refresh_token` + `expires_in` added in the fork so the orchestration
+                # in authenticate_with_refresh_fallback() can persist them. Additive
+                # change — existing callers reading only access_token/actor_key/jwt_data
+                # are unaffected.
                 return {
                     'access_token': access_token,
+                    'refresh_token': token_info.get('refresh_token'),
+                    'expires_in': token_info.get('expires_in', 3600),
                     'actor_key': actor_key,
                     'jwt_data': jwt_data
                 }
-            
+
             elif poll_data.get('status') == 'pending':
                 print(".", end="", flush=True)  # Show progress
             else:
                 logging.error(f"Error during polling. Status: {poll_data.get('status')}, Response: {poll_data}")
                 sys.exit("BankID authentication failed")
+
+    # ----- Fork additions: refresh-token orchestration (Phase 2 of spec) -----
+
+    def authenticate_with_refresh_fallback(self, ssn: str) -> dict:
+        """Orchestrates auth across three paths:
+            1. cached access_token still valid → reuse (zero network)
+            2. cached refresh_token present → refresh-token grant
+            3. BankID QR flow (existing authenticate)
+
+        Always persists tokens after any successful auth (paths 2 + 3 write;
+        path 1 reads from the existing persisted state). Returns the same
+        shape as authenticate() for caller compatibility.
+        """
+        cached = _token_store.load_tokens(ssn)
+
+        # Path 1: cached valid access_token (FR-4)
+        if cached and not _token_store.is_access_token_expired(cached):
+            logging.info("Using cached access_token (no network call to Kivra)")
+            return self._auth_dict_from_cached(cached)
+
+        # Path 2: refresh-token grant (FR-1)
+        if cached and _token_store.has_refresh_token(cached):
+            logging.info("Cached access_token expired; attempting refresh-token grant")
+            refresh_response = self._try_refresh(cached["refresh_token"])
+            if refresh_response is not None:
+                _token_store.save_tokens(
+                    ssn,
+                    response=refresh_response,
+                    jwt_data=cached.get("id_token_jwt_data", {}),
+                    prior=cached,
+                )
+                return self._auth_dict_from_cached(_token_store.load_tokens(ssn))
+            # else: fall through to BankID
+
+        # Path 3: BankID QR flow (FR-5)
+        logging.info("Falling back to BankID QR flow")
+        auth_dict = self.authenticate(ssn)
+        _token_store.save_tokens(
+            ssn,
+            response={
+                "access_token": auth_dict["access_token"],
+                "refresh_token": auth_dict.get("refresh_token"),
+                "expires_in": auth_dict.get("expires_in", 3600),
+            },
+            jwt_data=auth_dict.get("jwt_data", {}),
+        )
+        return auth_dict
+
+    def _try_refresh(self, refresh_token: str) -> Optional[dict]:
+        """POST /v2/oauth2/token with grant_type=refresh_token.
+
+        Returns response dict on 200 + valid access_token. Returns None on any
+        failure mode: 4xx, 5xx, network error, non-JSON response, response
+        missing access_token. Failure reasons logged at INFO (recoverable) or
+        WARNING (unexpected); never raises.
+        """
+        token_url = "https://app.api.kivra.com/v2/oauth2/token"
+        try:
+            r = requests.post(
+                token_url,
+                json={
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                    "client_id": self.client_id,
+                },
+                headers={"Content-Type": "application/json"},
+                timeout=30,
+            )
+        except requests.exceptions.RequestException as e:
+            logging.warning("Refresh request network error: %s; falling back to BankID", e)
+            return None
+
+        if r.status_code == 200:
+            try:
+                data = r.json()
+            except (json.JSONDecodeError, ValueError):
+                logging.warning("Refresh response 200 but body is not JSON; falling back to BankID")
+                return None
+            if not data.get("access_token"):
+                logging.warning(
+                    "Refresh response 200 but missing access_token; falling back to BankID"
+                )
+                return None
+            return data
+        elif r.status_code in (400, 401):
+            logging.info(
+                "Refresh-token grant rejected (HTTP %s); falling back to BankID", r.status_code
+            )
+            return None
+        else:
+            logging.warning(
+                "Refresh-token grant returned HTTP %s; falling back to BankID", r.status_code
+            )
+            return None
+
+    def _auth_dict_from_cached(self, cached: dict) -> dict:
+        """Translates a stored tokens dict (load_tokens schema) to the auth_dict
+        shape that downstream consumers (KivraApiClient) expect.
+        """
+        return {
+            "access_token": cached["access_token"],
+            "refresh_token": cached.get("refresh_token"),
+            "expires_in": None,  # not meaningful post-load (use is_access_token_expired)
+            "actor_key": cached.get("actor_key"),
+            "jwt_data": cached.get("id_token_jwt_data", {}),
+        }

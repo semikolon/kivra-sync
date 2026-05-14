@@ -268,6 +268,24 @@ def test_refresh_200_missing_access_token_falls_back_to_bankid(auth, bankid_flow
 
 
 @responses.activate
+def test_refresh_200_non_json_body_falls_back_to_bankid(auth, bankid_flow_mock, tokens_dir):
+    """200 OK with non-JSON body → treat as malformed → BankID fallback."""
+    with freeze_time("2026-05-14T10:00:00Z"):
+        tokens.save_tokens(
+            FAKE_SSN,
+            {"access_token": "atk_old", "refresh_token": "rtk_old", "expires_in": 3600},
+            {"kivra_user_id": "abc"},
+        )
+
+    responses.add(responses.POST, TOKEN_URL, body="this is not JSON at all", status=200)
+
+    with freeze_time("2026-05-14T12:00:00Z"):
+        auth.authenticate_with_refresh_fallback(FAKE_SSN)
+
+    bankid_flow_mock.assert_called_once()
+
+
+@responses.activate
 def test_expired_access_no_refresh_token_falls_back_to_bankid(auth, bankid_flow_mock, tokens_dir):
     """If tokens file exists with expired access AND no refresh_token → skip refresh, do BankID."""
     with freeze_time("2026-05-14T10:00:00Z"):
