@@ -2,6 +2,14 @@ temp
 .DS_store
 */__pycache__
 venv
+.venv
 node_modules
 data
 __pycache__
+
+# Test + coverage artifacts (fork addition)
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+*.egg-info/
