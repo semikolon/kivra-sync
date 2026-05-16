@@ -1,0 +1,25 @@
+# Packaging added 2026-05-16 so the fork is importable as a library
+# (din-mamma / DIM consumes it programmatically for Sensor-1 live sync).
+# The fork keeps its flat layout (top-level packages + kivra_sync entry
+# module); this just declares it for `pip install -e`.
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kivra-sync"
+version = "1.0.0"
+description = "Sync documents from Kivra (BankID auth, refresh-token persistence, env-var SSN). semikolon fork."
+requires-python = ">=3.10"
+dependencies = [
+    "Pillow==11.3.0",
+    "qrcode==8.2",
+    "Requests==2.32.4",
+    "weasyprint==66.0",
+]
+
+[tool.setuptools]
+# Flat layout: explicit top-level packages + the two top-level modules the
+# entrypoint imports (`from __version__ import ...`, `kivra_sync`).
+packages = ["kivra", "storage", "interaction", "utils"]
+py-modules = ["kivra_sync", "__version__"]
