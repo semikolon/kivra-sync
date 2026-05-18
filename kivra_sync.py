@@ -16,6 +16,7 @@ from kivra.receipts import ReceiptFetcher
 from kivra.letters import LetterFetcher
 from storage.filesystem import FileSystemStoreProvider
 from interaction.local import LocalInteractionProvider
+from interaction.local_html import LocalHtmlInteractionProvider
 from interaction.ntfy import NtfyInteractionProvider
 from interaction.web import WebInteractionProvider
 
@@ -98,8 +99,10 @@ def main():
     parser.add_argument('--base-dir', help='Base directory for storing documents (default: script directory)')
     
     # Interaction provider selection
-    parser.add_argument('--interaction-provider', choices=['local', 'ntfy', 'web'], default='local',
-                        help='Interaction provider to use (default: local)')
+    parser.add_argument('--interaction-provider', choices=['local', 'local_html', 'ntfy', 'web'], default='local',
+                        help='Interaction provider to use (default: local). '
+                             'local_html = self-refreshing file:// QR viewer '
+                             '(state-aware, no Preview, no HTTP server).')
     
     # ntfy provider options
     parser.add_argument('--ntfy-topic', help='ntfy topic to send notifications to')
@@ -172,6 +175,8 @@ def main():
     # Initialize the interaction provider
     if args.interaction_provider == 'local':
         interaction_provider = LocalInteractionProvider()
+    elif args.interaction_provider == 'local_html':
+        interaction_provider = LocalHtmlInteractionProvider()
     elif args.interaction_provider == 'ntfy':
         if not args.ntfy_topic:
             parser.error("--ntfy-topic is required when using the ntfy interaction provider")
