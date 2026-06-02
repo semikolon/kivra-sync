@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from interaction.base import InteractionProvider
+from interaction.local import LocalInteractionProvider
 from interaction.local_html import LocalHtmlInteractionProvider
 
 
@@ -85,6 +86,53 @@ def test_never_raises_on_bad_path():
     prov.display_qr_code("/nonexistent/dir/that/cannot/be/made/\0/qr.png")
     prov.report_authentication_success()
     prov.report_completion({"receipts_total": 0, "letters_total": 0})
+
+
+def test_refresh_qr_code_replaces_png_atomically(qr_png: Path, tmp_path: Path):
+    """BankID animates the QR (~1 s rotation, ~30 s order TTL per
+    docs/sensors.md § 86). Poll loop calls refresh_qr_code with a
+    re-rendered PNG on each pending response; the viewer's existing 800 ms
+    `<img src>` cache-bust loop picks it up without re-opening the tab.
+
+    Regression pin for the 2026-06-02 root-cause finding: the May 2026
+    local_html provider self-refreshed the VIEWER but never replaced the
+    PNG bytes, so `start_failed` still hit on any user pause longer than
+    one BankID QR rotation. This test fails if a future refactor reverts
+    refresh_qr_code to no-op for the LocalHtml path.
+    """
+    prov = LocalHtmlInteractionProvider(auto_open=False)
+    prov.display_qr_code(str(qr_png))
+
+    # Write a different PNG to a second source path — simulates the polling
+    # loop re-rendering qrcode with a rotated qr_code string.
+    rotated = tmp_path / "kivra_qr_rotated.png"
+    rotated.write_bytes(b"\x89PNG\r\n\x1a\nROTATED_FAKE_BYTES_FOR_TEST")
+    prov.refresh_qr_code(str(rotated))
+
+    served = qr_png.parent / "qr.png"
+    assert served.exists()
+    assert served.read_bytes() == rotated.read_bytes(), (
+        "qr.png must be replaced with the rotated bytes after refresh"
+    )
+
+
+def test_refresh_qr_code_default_is_noop(qr_png: Path):
+    """Base class default + legacy providers (LocalInteractionProvider opens
+    a fresh Preview window on each call; refreshing would spawn one per
+    second) must safely no-op so callers can unconditionally invoke
+    refresh_qr_code in the polling loop without provider-specific branches."""
+    legacy = LocalInteractionProvider()
+    # Must not raise; legacy providers leave the user's static viewer alone.
+    assert legacy.refresh_qr_code(str(qr_png)) is None
+
+
+def test_refresh_qr_code_before_display_is_safe(qr_png: Path):
+    """Defensive: if refresh is called before display_qr_code initializes
+    the viewer dir (impossible by current control flow but cheap to pin),
+    it must not raise."""
+    prov = LocalHtmlInteractionProvider(auto_open=False)
+    # No display_qr_code call → self._dir is None.
+    assert prov.refresh_qr_code(str(qr_png)) is None
 
 
 def test_selectable_via_cli_choice():

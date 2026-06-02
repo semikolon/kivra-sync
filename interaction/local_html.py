@@ -126,6 +126,27 @@ class LocalHtmlInteractionProvider(InteractionProvider):
             logging.error("Could not render self-refreshing QR viewer: %s", e)
             print(f"QR code saved as '{qr_image_path}'")
 
+    def refresh_qr_code(self, qr_image_path):
+        """Atomically replace `qr.png` next to the open viewer — the HTML's
+        own 800 ms cache-bust reload picks it up without re-opening the tab.
+
+        Wired from `KivraAuth._poll_for_auth` whenever Kivra includes a fresh
+        `qr_code` in a pending poll response, so the rotating BankID code is
+        always within its ~1-second server-side validity window when scanned
+        (without this, the static initial QR expires inside the order's
+        ~30-second total TTL → `start_failed`). Best-effort — never raises.
+        """
+        if self._dir is None:
+            return
+        try:
+            src = Path(qr_image_path)
+            png = self._dir / "qr.png"
+            tmp = self._dir / "qr.png.tmp"
+            shutil.copyfile(src, tmp)
+            tmp.replace(png)
+        except Exception as e:  # noqa: BLE001 - never derail auth
+            logging.warning("Could not refresh QR PNG: %s", e)
+
     def report_authentication_success(self):
         """BankID scan succeeded; data sync starting. Flip the open tab to
         the 'authorized' state + keep console parity with LocalInteraction."""

@@ -33,11 +33,33 @@ class InteractionProvider(ABC):
     def display_qr_code(self, qr_image_path):
         """
         Display a QR code for BankID authentication.
-        
+
         Args:
             qr_image_path (str): Path to the QR code image file
         """
         pass
+
+    def refresh_qr_code(self, qr_image_path):
+        """Update the displayed QR code in-place without re-opening the viewer.
+
+        BankID's animated QR rotates server-side every ~1 second and the
+        overall order expires in ~30 s (docs/sensors.md § 86). A polling loop
+        that ignores rotating `qr_code` field in poll responses will let the
+        BankID order time out with `start_failed` even though the viewer
+        appears live (observed 2026-06-02 from `dim sync`).
+
+        Default: NO-OP. Providers that open a single self-refreshing surface
+        (e.g. LocalHtmlInteractionProvider's `qr.html` viewer) override this
+        with an atomic PNG replace so the open tab's 800 ms refresh picks up
+        the new code without opening a second window. Providers that open a
+        new OS-level viewer per call (LocalInteractionProvider → Preview)
+        rightly leave this as no-op — calling display_qr_code each time would
+        spawn a new Preview window per second.
+
+        Args:
+            qr_image_path (str): Path to the FRESHLY-WRITTEN QR PNG.
+        """
+        return None
     
     @abstractmethod
     def report_completion(self, stats):

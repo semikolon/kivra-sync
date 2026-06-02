@@ -79,9 +79,15 @@ class KivraAuth:
         # Display QR code using the interaction provider
         self.interaction_provider.display_qr_code(temp_path)
         print("\nQR-kod visas nu. Skanna den med BankID-appen.")
-        
-        # Poll for authentication completion
-        token_info = self._poll_for_auth(next_poll_url, auth_code, code_verifier)
+
+        # Poll for authentication completion. `temp_path` is passed so the
+        # poll loop can regenerate the PNG on each pending response — Kivra
+        # animates the BankID QR server-side (~1 s rotation), and refreshing
+        # the file in-place lets LocalHtmlInteractionProvider's viewer pick up
+        # the fresh code via its existing 800 ms cache-bust loop.
+        token_info = self._poll_for_auth(
+            next_poll_url, auth_code, code_verifier, temp_path
+        )
         
         # Clean up temporary QR code file
         try:
@@ -138,25 +144,73 @@ class KivraAuth:
         return r.json()
     
     
-    def _poll_for_auth(self, next_poll_url, auth_code, code_verifier):
+    def _poll_for_auth(self, next_poll_url, auth_code, code_verifier, temp_path=None):
         """
         Poll for BankID authentication completion.
-        
+
         Args:
             next_poll_url (str): URL to poll for authentication status
             auth_code (str): Authorization code
             code_verifier (str): PKCE code verifier
-            
+            temp_path (str | None): Path to the QR PNG file. If provided AND
+                Kivra includes a rotating ``qr_code`` field in pending poll
+                responses, the file is regenerated in-place each poll and the
+                interaction_provider's ``refresh_qr_code`` is called so the
+                self-refreshing viewer picks up the fresh code without
+                re-opening the tab. None preserves the legacy single-PNG
+                behaviour for any caller that hasn't passed it through.
+
         Returns:
             dict: Token information including access_token and actor_key
         """
         print("\nWaiting for BankID authentication...")
-        
+
+        # BankID animated-QR rotates ~1 s server-side; 1.5 s polling is the
+        # balance between rotation freshness and Kivra-side rate-limit safety
+        # (legacy was 5 s — too slow for BankID's ~30 s order TTL when the
+        # user is even briefly distracted).
+        poll_interval_s = 1.5
+        # Whether Kivra's pending responses include rotating qr_code. Logged
+        # ONCE on first observation so the field is auditable without spamming.
+        rotating_qr_logged = False
+
         while True:
-            time.sleep(5)
+            time.sleep(poll_interval_s)
             poll_response = self.session.get(f"https://app.api.kivra.com{next_poll_url}")
             poll_data = poll_response.json()
-            
+
+            # Rotating-QR refresh: if Kivra returns a fresh qr_code in this
+            # pending response, regenerate the PNG and tell the viewer to
+            # reload it. Robust to absence (legacy / non-animated path stays
+            # a no-op). Best-effort — viewer failures never derail auth.
+            if temp_path and poll_data.get('status') == 'pending':
+                fresh_qr = poll_data.get('qr_code')
+                if fresh_qr:
+                    if not rotating_qr_logged:
+                        logging.info(
+                            "Kivra pending poll includes qr_code — rotating "
+                            "QR refresh enabled (BankID animated-QR contract)"
+                        )
+                        rotating_qr_logged = True
+                    try:
+                        qr_new = qrcode.QRCode(
+                            version=1,
+                            error_correction=qrcode.constants.ERROR_CORRECT_L,
+                            box_size=10,
+                            border=4,
+                        )
+                        qr_new.add_data(fresh_qr)
+                        qr_new.make(fit=True)
+                        qr_new.make_image(
+                            fill_color="black", back_color="white"
+                        ).save(temp_path)
+                        self.interaction_provider.refresh_qr_code(temp_path)
+                    except Exception as e:  # noqa: BLE001 - never derail auth
+                        logging.warning(
+                            "Could not refresh rotating QR (%s); BankID order "
+                            "may expire if user is distracted", e
+                        )
+
             if poll_data.get('status') == 'complete':
                 print("\nBankID authentication successful!")
                 
