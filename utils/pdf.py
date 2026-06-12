@@ -4,12 +4,26 @@
 import io
 import logging
 import html
-from weasyprint import HTML
 
-# Configure weasyprint logging
-logger = logging.getLogger('weasyprint')
-logger.setLevel(logging.ERROR)
-logger.handlers = [logging.FileHandler('./weasyprint.log')]  # Remove the default stderr handler
+# weasyprint is an OPTIONAL dependency. It is imported lazily inside
+# html_to_pdf() so the module (and the filesystem storage backend that imports
+# it at top level) loads even on machines without weasyprint's native GTK libs
+# (e.g. a plain Windows install). html_to_pdf() returns None when weasyprint is
+# unavailable, and the filesystem backend then falls back to saving raw .html.
+# Empirically (Fredrik's 902-letter corpus, 2026-06-12) only ~30 HTML-only
+# letters exist and they are agency statements (SCB, Pensionsmyndigheten), not
+# bills — so dropping PDF-rendering of HTML letters costs no obligation data.
+_weasyprint_logging_configured = False
+
+
+def _configure_weasyprint_logging():
+    global _weasyprint_logging_configured
+    if _weasyprint_logging_configured:
+        return
+    logger = logging.getLogger('weasyprint')
+    logger.setLevel(logging.ERROR)
+    logger.handlers = [logging.FileHandler('./weasyprint.log')]  # Remove the default stderr handler
+    _weasyprint_logging_configured = True
 
 def text_to_html(text_content, title=None):
     """
@@ -93,6 +107,15 @@ def html_to_pdf(html_content):
         bytes: PDF content as bytes, or None if conversion failed
     """
     try:
+        from weasyprint import HTML  # lazy: optional native dep (GTK)
+    except Exception as e:
+        logging.warning(
+            f"weasyprint unavailable ({e}); HTML letters will be saved as raw .html "
+            f"instead of rendered PDF. Install weasyprint + GTK to enable PDF rendering."
+        )
+        return None
+    try:
+        _configure_weasyprint_logging()
         pdf_buffer = io.BytesIO()
         HTML(string=html_content).write_pdf(pdf_buffer)
         return pdf_buffer.getvalue()
