@@ -81,9 +81,15 @@ class LocalHtmlInteractionProvider(InteractionProvider):
     and shows its own success/timeout state.
     """
 
-    def __init__(self, *, auto_open: bool = True) -> None:
+    def __init__(self, *, auto_open: bool = True, out_dir: Path | None = None) -> None:
         # auto_open=False in tests so the suite never spawns a browser.
+        # out_dir (din-mamma `dim sync-all`, 2026-07): write the viewer files
+        # into a caller-chosen directory (DIM's shared "Din Mamma" run-dir)
+        # instead of next to the QR PNG, so the Kivra QR appears in DIM's ONE
+        # persistent window with NO browser (combined with auto_open=False).
+        # Default None = legacy behaviour (write next to the QR PNG).
         self._auto_open = auto_open
+        self._out_dir = Path(out_dir) if out_dir is not None else None
         self._dir: Path | None = None
 
     def _write_state(self, state: str) -> None:
@@ -105,7 +111,7 @@ class LocalHtmlInteractionProvider(InteractionProvider):
         console line if anything fails."""
         try:
             src = Path(qr_image_path)
-            self._dir = src.parent
+            self._dir = self._out_dir or src.parent
             self._dir.mkdir(parents=True, exist_ok=True)
             # Copy the QR next to the viewer (relative ref works on file://),
             # atomically so the 800 ms poll never sees a half-written frame.

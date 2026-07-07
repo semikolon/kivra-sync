@@ -103,7 +103,15 @@ def main():
                         help='Interaction provider to use (default: local). '
                              'local_html = self-refreshing file:// QR viewer '
                              '(state-aware, no Preview, no HTTP server).')
-    
+    parser.add_argument('--qr-dir',
+                        help='local_html only: write the QR viewer files (qr.png, qr.html, '
+                             'qr_state.js) into this directory instead of the temp dir. Used by '
+                             "din-mamma's `dim sync-all` to publish the Kivra QR into its shared "
+                             '"Din Mamma" window.')
+    parser.add_argument('--no-browser', action='store_true',
+                        help='local_html only: do NOT auto-open a browser (the caller displays '
+                             'the QR itself, e.g. din-mamma\'s shared sync viewer).')
+
     # ntfy provider options
     parser.add_argument('--ntfy-topic', help='ntfy topic to send notifications to')
     parser.add_argument('--ntfy-server', default='https://ntfy.sh', help='ntfy server URL (default: https://ntfy.sh)')
@@ -176,7 +184,10 @@ def main():
     if args.interaction_provider == 'local':
         interaction_provider = LocalInteractionProvider()
     elif args.interaction_provider == 'local_html':
-        interaction_provider = LocalHtmlInteractionProvider()
+        interaction_provider = LocalHtmlInteractionProvider(
+            auto_open=not args.no_browser,
+            out_dir=args.qr_dir if args.qr_dir else None,
+        )
     elif args.interaction_provider == 'ntfy':
         if not args.ntfy_topic:
             parser.error("--ntfy-topic is required when using the ntfy interaction provider")

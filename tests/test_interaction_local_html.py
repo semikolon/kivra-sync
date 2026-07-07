@@ -57,6 +57,33 @@ def test_display_qr_code_writes_self_refreshing_viewer(qr_png: Path):
     assert '"scanning"' in state
 
 
+def test_out_dir_redirects_viewer_files_and_no_browser(qr_png: Path, tmp_path: Path, monkeypatch):
+    """din-mamma `dim sync-all` seam: with out_dir set, the viewer files land
+    in the caller's shared run-dir (NOT next to the QR PNG), and auto_open=False
+    never opens a browser — so the Kivra QR shows in DIM's one shared window."""
+    import interaction.local_html as mod
+
+    opened: list[str] = []
+    monkeypatch.setattr(mod.webbrowser, "open", lambda uri: opened.append(uri))
+
+    shared = tmp_path / "dim-run"
+    prov = LocalHtmlInteractionProvider(auto_open=False, out_dir=shared)
+    prov.display_qr_code(str(qr_png))
+
+    # Viewer files went to the shared run-dir, not qr_png.parent.
+    assert (shared / "qr.png").read_bytes() == qr_png.read_bytes()
+    assert (shared / "qr.html").is_file()
+    assert '"scanning"' in (shared / "qr_state.js").read_text(encoding="utf-8")
+    assert not (qr_png.parent / "qr.html").exists()  # legacy location untouched
+    assert opened == []  # no browser
+
+    # Lifecycle state still flips in the redirected dir + rotating refresh lands there.
+    prov.refresh_qr_code(str(qr_png))
+    assert (shared / "qr.png").read_bytes() == qr_png.read_bytes()
+    prov.report_authentication_success()
+    assert '"authorized"' in (shared / "qr_state.js").read_text(encoding="utf-8")
+
+
 def test_lifecycle_transitions_flip_viewer_state(qr_png: Path, capsys):
     prov = LocalHtmlInteractionProvider(auto_open=False)
     prov.display_qr_code(str(qr_png))
