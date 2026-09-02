@@ -18,6 +18,9 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# POSIX mode bits mean nothing on Windows (see load_tokens); evaluated once so tests can flip it.
+_IS_WINDOWS = os.name == "nt"
+
 
 def _tokens_dir() -> Path:
     """Resolved per-call so env-var overrides take effect under tests."""
@@ -58,8 +61,14 @@ def load_tokens(ssn: str) -> Optional[dict]:
         logger.warning("Cannot stat tokens file %s: %s", path, e)
         return None
 
-    # Refuse if group/other have any access (mode > 0600)
-    if mode & 0o077:
+    # Refuse if group/other have any access (mode > 0600). POSIX only: on
+    # Windows st_mode carries no ownership bits (a writable file always reports
+    # 0o666 and os.chmod can only toggle the read-only flag), so the check would
+    # refuse every token file ever written there and force a fresh BankID scan on
+    # each run. NTFS ACLs on %USERPROFILE% are the protection on that platform.
+    # (Found 2026-09-02 on a Windows deploy: "may have been tampered with" on a
+    # file the tool itself had just written.)
+    if not _IS_WINDOWS and mode & 0o077:
         logger.error(
             "Refusing to read %s: permissions are %s (must be 0600). "
             "Token file may have been tampered with — investigate manually before retrying.",

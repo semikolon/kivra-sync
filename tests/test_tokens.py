@@ -317,3 +317,19 @@ def test_is_access_token_expired_naive_datetime_treated_as_utc():
         assert tokens.is_access_token_expired({"access_token_expires_at": "2026-05-14T11:55:00"}) is True
         # 5 minutes after frozen now, naive
         assert tokens.is_access_token_expired({"access_token_expires_at": "2026-05-14T12:05:00"}) is False
+
+
+def test_load_tokens_windows_skips_posix_mode_check(tokens_dir, kivra_bankid_response_with_refresh, monkeypatch):
+    """On Windows st_mode carries no ownership bits (a writable file always reports
+    0o666), so the 0600 refusal must not fire there. The platform flag is flipped
+    directly; the file is deliberately left group/other-readable."""
+    from kivra import tokens as tk
+
+    tk.save_tokens(FAKE_SSN, kivra_bankid_response_with_refresh, {"kivra_user_id": "abc"})
+    path = tk.tokens_path(FAKE_SSN)
+    os.chmod(path, 0o644)
+    monkeypatch.setattr(tk, "_IS_WINDOWS", True)
+    loaded = tk.load_tokens(FAKE_SSN)
+    assert loaded is not None and "access_token" in loaded
+    monkeypatch.setattr(tk, "_IS_WINDOWS", False)
+    assert tk.load_tokens(FAKE_SSN) is None
