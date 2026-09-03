@@ -15,8 +15,12 @@ dependencies = [
     "Pillow==11.3.0",
     "qrcode==8.2",
     "Requests==2.32.4",
-    "weasyprint==66.0",
 ]
+
+[project.optional-dependencies]
+# HTML-only letters render to PDF only when weasyprint (GTK on Windows) is present;
+# utils/pdf.py lazy-imports it and falls back to raw .html (commit b4d866b).
+pdf = ["weasyprint==66.0"]
 
 [tool.setuptools]
 # Flat layout: explicit top-level packages + the two top-level modules the
